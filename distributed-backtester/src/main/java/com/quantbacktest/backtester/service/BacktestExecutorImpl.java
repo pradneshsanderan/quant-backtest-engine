@@ -1,8 +1,7 @@
 package com.quantbacktest.backtester.service;
 
-import com.quantbacktest.backtester.domain.BacktestJob;
-import com.quantbacktest.backtester.domain.BacktestResult;
-import com.quantbacktest.backtester.domain.JobStatus;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.quantbacktest.backtester.domain.*;
 import com.quantbacktest.backtester.infrastructure.QueueService;
 import com.quantbacktest.backtester.repository.BacktestJobRepository;
 import com.quantbacktest.backtester.repository.BacktestResultRepository;
@@ -13,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * Implementation of BacktestExecutor for executing backtest jobs.
@@ -29,6 +29,9 @@ public class BacktestExecutorImpl implements BacktestExecutor {
     private final BacktestJobRepository backtestJobRepository;
     private final BacktestResultRepository backtestResultRepository;
     private final QueueService queueService;
+    private final MarketDataService marketDataService;
+    private final StrategyFactory strategyFactory;
+    private final ObjectMapper objectMapper;
 
     @Override
     @Transactional
@@ -64,31 +67,72 @@ public class BacktestExecutorImpl implements BacktestExecutor {
     }
 
     /**
-     * Placeholder backtest logic.
-     * TODO: Implement actual backtesting algorithm.
+     * Execute backtest using the real backtesting engine.
      */
-    private BacktestResult performBacktest(BacktestJob job) {
+    private com.quantbacktest.backtester.domain.BacktestResult performBacktest(BacktestJob job) {
         log.info("Performing backtest for job {} - Strategy: {}, Symbol: {}, Period: {} to {}",
                 job.getId(), job.getStrategyName(), job.getSymbol(),
                 job.getStartDate(), job.getEndDate());
 
-        // Simulate processing time
         try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Backtest interrupted", e);
-        }
+            // Load market data
+            List<MarketData> marketData = marketDataService.loadMarketData(
+                    job.getSymbol(), job.getStartDate(), job.getEndDate());
 
-        // Generate placeholder results
-        return BacktestResult.builder()
-                .job(job)
-                .totalReturn(new BigDecimal("15.25"))
-                .sharpeRatio(new BigDecimal("1.45"))
-                .maxDrawdown(new BigDecimal("-8.30"))
-                .winRate(new BigDecimal("0.62"))
-                .resultJson("{\"trades\": 150, \"placeholder\": true}")
-                .build();
+            if (marketData.isEmpty()) {
+                throw new RuntimeException("No market data available for the specified period");
+            }
+
+            // Parse parameters and get initial capital
+            BigDecimal initialCapital = parseInitialCapital(job.getParametersJson());
+
+            // Create strategy
+            Strategy strategy = strategyFactory.createStrategy(
+                    job.getStrategyName(), job.getParametersJson());
+
+            // Run backtest
+            BacktestEngine engine = new BacktestEngine();
+            BacktestEngine.BacktestConfig config = BacktestEngine.BacktestConfig.builder()
+                    .strategy(strategy)
+                    .marketData(marketData)
+                    .initialCapital(initialCapital)
+                    .build();
+
+            BacktestEngine.BacktestResult engineResult = engine.runBacktest(config);
+
+            // Convert trades to JSON
+            String tradesJson = objectMapper.writeValueAsString(engineResult.getTrades());
+
+            // Create result entity
+            return com.quantbacktest.backtester.domain.BacktestResult.builder()
+                    .job(job)
+                    .totalReturn(engineResult.getTotalReturn())
+                    .sharpeRatio(engineResult.getSharpeRatio())
+                    .maxDrawdown(engineResult.getMaxDrawdown())
+                    .winRate(engineResult.getWinRate())
+                    .resultJson(tradesJson)
+                    .build();
+
+        } catch (Exception e) {
+            log.error("Backtest execution failed for job {}", job.getId(), e);
+            throw new RuntimeException("Backtest execution failed", e);
+        }
+    }
+
+    /**
+     * Parse initial capital from parameters JSON.
+     */
+    private BigDecimal parseInitialCapital(String parametersJson) {
+        try {
+            var params = objectMapper.readTree(parametersJson);
+            if (params.has("initialCapital")) {
+                return new BigDecimal(params.get("initialCapital").asText());
+            }
+            return new BigDecimal("10000.00"); // Default
+        } catch (Exception e) {
+            log.warn("Failed to parse initialCapital from parameters, using default", e);
+            return new BigDecimal("10000.00");
+        }
     }
 
     /**
