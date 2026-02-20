@@ -1,48 +1,64 @@
 package com.quantbacktest.backtester.service;
 
+import com.quantbacktest.backtester.domain.HistoricalMarketData;
 import com.quantbacktest.backtester.domain.MarketData;
+import com.quantbacktest.backtester.repository.HistoricalMarketDataRepository;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
+import java.util.stream.Collectors;
 
 /**
  * Service for loading and managing market data.
- * Currently generates synthetic data; can be extended to load from CSV.
+ * Loads from PostgreSQL database with Redis caching.
+ * Falls back to synthetic data if no real data is available.
  */
 @Service
+@RequiredArgsConstructor
 @Slf4j
 public class MarketDataService {
 
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private final HistoricalMarketDataRepository historicalMarketDataRepository;
 
     /**
      * Load market data for the given symbol and date range.
-     * Currently generates synthetic data for demonstration.
-     * TODO: Implement CSV loading from file system or database.
+     * Uses Redis cache (TTL: 10 minutes) to avoid repeated database queries.
+     * Falls back to synthetic data if no historical data exists.
      */
+    @Cacheable(value = "marketData", key = "#symbol + '_' + #startDate + '_' + #endDate")
     public List<MarketData> loadMarketData(String symbol, LocalDate startDate, LocalDate endDate) {
         log.info("Loading market data for {} from {} to {}", symbol, startDate, endDate);
 
-        // Generate synthetic market data
-        List<MarketData> data = generateSyntheticData(symbol, startDate, endDate);
+        // Try to load from database first
+        List<HistoricalMarketData> historicalData = historicalMarketDataRepository
+                .findBySymbolAndDateRange(symbol, startDate, endDate);
 
-        // Sort by date to ensure chronological order
-        data.sort(Comparator.comparing(MarketData::getDate));
+        if (!historicalData.isEmpty()) {
+            log.info("Loaded {} historical data points for {} from database", historicalData.size(), symbol);
+            return historicalData.stream()
+                    .map(HistoricalMarketData::toMarketData)
+                    .collect(Collectors.toList());
+        }
 
-        log.info("Loaded {} data points for {}", data.size(), symbol);
-        return data;
+        // Fall back to synthetic data if no historical data exists
+        log.warn("No historical data found for {}. Generating synthetic data.", symbol);
+        List<MarketData> syntheticData = generateSyntheticData(symbol, startDate, endDate);
+
+        log.info("Generated {} synthetic data points for {}", syntheticData.size(), symbol);
+        return syntheticData;
     }
 
     /**
-     * Generate synthetic market data for demonstration.
+     * Generate synthetic market data for demonstration or testing.
      * Simulates realistic price movements with trends and volatility.
      */
     private List<MarketData> generateSyntheticData(String symbol, LocalDate startDate, LocalDate endDate) {
@@ -85,43 +101,6 @@ public class MarketDataService {
             }
 
             currentDate = currentDate.plusDays(1);
-        }
-
-        return data;
-    }
-
-    /**
-     * Parse market data from CSV content.
-     * Expected format: date,open,high,low,close,volume
-     */
-    public List<MarketData> parseCSV(String symbol, String csvContent) {
-        List<MarketData> data = new ArrayList<>();
-        String[] lines = csvContent.split("\n");
-
-        // Skip header if present
-        int startIndex = lines[0].toLowerCase().contains("date") ? 1 : 0;
-
-        for (int i = startIndex; i < lines.length; i++) {
-            String line = lines[i].trim();
-            if (line.isEmpty())
-                continue;
-
-            try {
-                String[] parts = line.split(",");
-                MarketData marketData = MarketData.builder()
-                        .date(LocalDate.parse(parts[0], DATE_FORMATTER))
-                        .symbol(symbol)
-                        .open(new BigDecimal(parts[1]))
-                        .high(new BigDecimal(parts[2]))
-                        .low(new BigDecimal(parts[3]))
-                        .close(new BigDecimal(parts[4]))
-                        .volume(Long.parseLong(parts[5]))
-                        .build();
-
-                data.add(marketData);
-            } catch (Exception e) {
-                log.warn("Failed to parse CSV line {}: {}", i, line, e);
-            }
         }
 
         return data;
