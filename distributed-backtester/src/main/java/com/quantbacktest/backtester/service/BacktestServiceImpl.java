@@ -6,6 +6,7 @@ import com.quantbacktest.backtester.controller.dto.BacktestSubmissionRequest;
 import com.quantbacktest.backtester.controller.dto.BacktestSubmissionResponse;
 import com.quantbacktest.backtester.domain.BacktestJob;
 import com.quantbacktest.backtester.domain.JobStatus;
+import com.quantbacktest.backtester.infrastructure.QueueService;
 import com.quantbacktest.backtester.repository.BacktestJobRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +29,7 @@ import java.util.Optional;
 public class BacktestServiceImpl implements BacktestService {
 
     private final BacktestJobRepository backtestJobRepository;
+    private final QueueService queueService;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -59,10 +61,18 @@ public class BacktestServiceImpl implements BacktestService {
 
         log.info("Created new backtest job with ID: {}", savedJob.getId());
 
+        // Push job to Redis queue and update status
+        queueService.push(savedJob.getId());
+        savedJob.setStatus(JobStatus.QUEUED);
+        savedJob.setUpdatedAt(LocalDateTime.now());
+        backtestJobRepository.save(savedJob);
+
+        log.info("Job {} pushed to queue with status QUEUED", savedJob.getId());
+
         return BacktestSubmissionResponse.builder()
                 .jobId(savedJob.getId())
                 .status(savedJob.getStatus())
-                .message("Job submitted successfully")
+                .message("Job queued successfully")
                 .build();
     }
 
