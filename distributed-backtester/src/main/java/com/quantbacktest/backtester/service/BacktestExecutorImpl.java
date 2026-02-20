@@ -33,10 +33,13 @@ public class BacktestExecutorImpl implements BacktestExecutor {
     private final StrategyFactory strategyFactory;
     private final ObjectMapper objectMapper;
     private final ParameterSweepService parameterSweepService;
+    private final BacktestMetricsService metricsService;
 
     @Override
     @Transactional
     public void executeBacktest(BacktestJob job) {
+        long startTime = System.currentTimeMillis();
+
         // Log lifecycle start
         if (job.getRetryCount() == 0) {
             log.info("[JobId={}] Started", job.getId());
@@ -48,14 +51,14 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             // Race condition check: verify job is not already completed
             // This can happen if multiple workers dequeue the same job
             if (job.getStatus() == JobStatus.COMPLETED) {
-                log.warn("Job {} is already COMPLETED. Skipping execution to prevent duplicate processing.",
+                log.warn("[JobId={}] Already COMPLETED. Skipping execution to prevent duplicate processing.",
                         job.getId());
                 return;
             }
 
             // Also check if another worker is already processing it
             if (job.getStatus() == JobStatus.RUNNING) {
-                log.warn("Job {} is already RUNNING by another worker. Skipping duplicate execution.",
+                log.warn("[JobId={}] Already RUNNING by another worker. Skipping duplicate execution.",
                         job.getId());
                 return;
             }
@@ -65,21 +68,30 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             job.setUpdatedAt(LocalDateTime.now());
             backtestJobRepository.save(job);
 
-            log.info("Job {} marked as RUNNING", job.getId());
+            log.info("[JobId={}] Status changed to RUNNING", job.getId());
 
             // Execute backtest logic
-            BacktestResult result = performBacktest(job);
+            BacktestResult result = performBacktest(job, startTime);
 
             // Save result
             backtestResultRepository.save(result);
-            log.info("Backtest result saved for job {}", job.getId());
+
+            // Calculate and log execution time
+            long executionTimeMs = System.currentTimeMillis() - startTime;
+            double executionTimeSec = executionTimeMs / 1000.0;
+
+            log.info("[JobId={}] Backtest result saved", job.getId());
 
             // Mark job as COMPLETED
             job.setStatus(JobStatus.COMPLETED);
             job.setUpdatedAt(LocalDateTime.now());
             backtestJobRepository.save(job);
 
-            log.info("[JobId={}] Completed successfully", job.getId());
+            log.info("[JobId={}] Status changed to COMPLETED", job.getId());
+            log.info("[JobId={}] Completed in {:.2f}s", job.getId(), executionTimeSec);
+
+            // Record metrics
+            metricsService.recordJobCompleted(executionTimeMs);
 
             // Update parent sweep job if this is part of a sweep
             if (job.getParentSweepJobId() != null) {
@@ -100,8 +112,8 @@ public class BacktestExecutorImpl implements BacktestExecutor {
     /**
      * Execute backtest using the real backtesting engine.
      */
-    private com.quantbacktest.backtester.domain.BacktestResult performBacktest(BacktestJob job) {
-        log.info("Performing backtest for job {} - Strategy: {}, Symbol: {}, Period: {} to {}",
+    private com.quantbacktest.backtester.domain.BacktestResult performBacktest(BacktestJob job, long startTime) {
+        log.info("[JobId={}] Performing backtest - Strategy: {}, Symbol: {}, Period: {} to {}",
                 job.getId(), job.getStrategyName(), job.getSymbol(),
                 job.getStartDate(), job.getEndDate());
 
@@ -134,6 +146,9 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             // Convert trades to JSON
             String tradesJson = objectMapper.writeValueAsString(engineResult.getTrades());
 
+            // Calculate execution time
+            long executionTimeMs = System.currentTimeMillis() - startTime;
+
             // Create result entity with all performance metrics
             return com.quantbacktest.backtester.domain.BacktestResult.builder()
                     .job(job)
@@ -144,11 +159,12 @@ public class BacktestExecutorImpl implements BacktestExecutor {
                     .sortinoRatio(engineResult.getSortinoRatio())
                     .maxDrawdown(engineResult.getMaxDrawdown())
                     .winRate(engineResult.getWinRate())
+                    .executionTimeMs(executionTimeMs)
                     .resultJson(tradesJson)
                     .build();
 
         } catch (Exception e) {
-            log.error("Backtest execution failed for job {}", job.getId(), e);
+            log.error("[JobId={}] Backtest execution failed: {}", job.getId(), e.getMessage(), e);
             throw new RuntimeException("Backtest execution failed", e);
         }
     }
@@ -190,7 +206,11 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             // Requeue the job
             queueService.push(job.getId());
 
+            log.info("[JobId={}] Status changed to QUEUED", job.getId());
             log.info("[JobId={}] Requeued for retry attempt {}", job.getId(), job.getRetryCount() + 1);
+
+            // Record retry metric
+            metricsService.recordJobRetried();
         } else {
             log.error("[JobId={}] Failed permanently after {} attempts: {}",
                     job.getId(), job.getRetryCount(), errorMessage);
@@ -199,6 +219,11 @@ public class BacktestExecutorImpl implements BacktestExecutor {
 
             job.setStatus(JobStatus.FAILED);
             backtestJobRepository.save(job);
+
+            log.info("[JobId={}] Status changed to FAILED", job.getId());
+
+            // Record failure metric
+            metricsService.recordJobFailed();
 
             // Update parent sweep job if this is part of a sweep
             if (job.getParentSweepJobId() != null) {

@@ -58,10 +58,17 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+    metrics:
+      enabled: true
   metrics:
     export:
       prometheus:
         enabled: true
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        backtest.execution.time: true
 
 # Logging Configuration
 logging:
@@ -71,8 +78,8 @@ logging:
     org.springframework.web: INFO
     org.hibernate.SQL: ${SQL_LOG_LEVEL:WARN}
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
-    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
 
 # Backtest Worker Configuration
 backtest:

@@ -51,6 +51,9 @@ public class BacktestResult {
     @Column(name = "win_rate", precision = 10, scale = 4)
     private BigDecimal winRate;
 
+    @Column(name = "execution_time_ms")
+    private Long executionTimeMs;
+
     @Column(name = "result_json", columnDefinition = "TEXT")
     private String resultJson;
 }

@@ -34,6 +34,7 @@ public class BacktestServiceImpl implements BacktestService {
     private final BacktestResultRepository backtestResultRepository;
     private final QueueService queueService;
     private final ObjectMapper objectMapper;
+    private final BacktestMetricsService metricsService;
 
     @Override
     @Transactional
@@ -60,7 +61,7 @@ public class BacktestServiceImpl implements BacktestService {
         BacktestJob newJob = createBacktestJob(request, idempotencyKey);
         BacktestJob savedJob = backtestJobRepository.save(newJob);
 
-        log.info("Created new backtest job with ID: {}", savedJob.getId());
+        log.info("[JobId={}] Created new backtest job", savedJob.getId());
 
         // Push job to Redis queue and update status
         queueService.push(savedJob.getId());
@@ -68,7 +69,11 @@ public class BacktestServiceImpl implements BacktestService {
         savedJob.setUpdatedAt(LocalDateTime.now());
         backtestJobRepository.save(savedJob);
 
-        log.info("Job {} pushed to queue with status QUEUED", savedJob.getId());
+        log.info("[JobId={}] Status changed to QUEUED", savedJob.getId());
+        log.info("[JobId={}] Pushed to queue", savedJob.getId());
+
+        // Record submission metric
+        metricsService.recordJobSubmitted();
 
         return BacktestSubmissionResponse.builder()
                 .jobId(savedJob.getId())
@@ -85,7 +90,7 @@ public class BacktestServiceImpl implements BacktestService {
     private BacktestSubmissionResponse handleExistingJob(BacktestJob job) {
         return switch (job.getStatus()) {
             case COMPLETED -> {
-                log.info("Job {} is COMPLETED. Fetching and returning results.", job.getId());
+                log.info("[JobId={}] Already COMPLETED. Fetching and returning cached results.", job.getId());
                 Optional<BacktestResult> result = backtestResultRepository.findByJobId(job.getId());
 
                 if (result.isPresent()) {
