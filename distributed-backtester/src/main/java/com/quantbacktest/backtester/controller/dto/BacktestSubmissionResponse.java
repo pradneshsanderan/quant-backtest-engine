@@ -6,8 +6,11 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
+
 /**
  * Response DTO for backtest job submission.
+ * Includes result data if job is already completed.
  */
 @Data
 @NoArgsConstructor
@@ -18,4 +21,11 @@ public class BacktestSubmissionResponse {
     private Long jobId;
     private JobStatus status;
     private String message;
+    private Boolean isExisting;
+
+    // Result fields (populated only if status is COMPLETED)
+    private BigDecimal totalReturn;
+    private BigDecimal sharpeRatio;
+    private BigDecimal maxDrawdown;
+    private BigDecimal winRate;
 }

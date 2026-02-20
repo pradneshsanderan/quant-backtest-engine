@@ -1,6 +1,7 @@
 package com.quantbacktest.backtester.infrastructure;
 
 import com.quantbacktest.backtester.domain.BacktestJob;
+import com.quantbacktest.backtester.domain.JobStatus;
 import com.quantbacktest.backtester.repository.BacktestJobRepository;
 import com.quantbacktest.backtester.service.BacktestExecutor;
 import lombok.RequiredArgsConstructor;
@@ -69,8 +70,27 @@ public class BacktestWorker implements Runnable {
             }
 
             BacktestJob job = jobOptional.get();
-            log.info("{} processing job {} - Strategy: {}, Symbol: {}",
-                    workerName, job.getId(), job.getStrategyName(), job.getSymbol());
+
+            // Idempotency check: verify job should be processed
+            if (job.getStatus() == JobStatus.COMPLETED) {
+                log.warn("{} - Job {} is already COMPLETED. Skipping duplicate processing.",
+                        workerName, job.getId());
+                return;
+            }
+
+            if (job.getStatus() == JobStatus.RUNNING) {
+                log.warn("{} - Job {} is already RUNNING. Another worker may be processing it.",
+                        workerName, job.getId());
+                return;
+            }
+
+            if (job.getStatus() == JobStatus.FAILED) {
+                log.info("{} - Job {} is marked FAILED. This may be a retry attempt.",
+                        workerName, job.getId());
+            }
+
+            log.info("{} processing job {} - Strategy: {}, Symbol: {}, Status: {}",
+                    workerName, job.getId(), job.getStrategyName(), job.getSymbol(), job.getStatus());
 
             // Execute the backtest
             backtestExecutor.executeBacktest(job);

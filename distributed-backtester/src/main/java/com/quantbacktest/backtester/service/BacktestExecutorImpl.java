@@ -39,6 +39,21 @@ public class BacktestExecutorImpl implements BacktestExecutor {
         log.info("Starting execution of backtest job {}", job.getId());
 
         try {
+            // Race condition check: verify job is not already completed
+            // This can happen if multiple workers dequeue the same job
+            if (job.getStatus() == JobStatus.COMPLETED) {
+                log.warn("Job {} is already COMPLETED. Skipping execution to prevent duplicate processing.",
+                        job.getId());
+                return;
+            }
+
+            // Also check if another worker is already processing it
+            if (job.getStatus() == JobStatus.RUNNING) {
+                log.warn("Job {} is already RUNNING by another worker. Skipping duplicate execution.",
+                        job.getId());
+                return;
+            }
+
             // Update job status to RUNNING
             job.setStatus(JobStatus.RUNNING);
             job.setUpdatedAt(LocalDateTime.now());
@@ -46,7 +61,7 @@ public class BacktestExecutorImpl implements BacktestExecutor {
 
             log.info("Job {} marked as RUNNING", job.getId());
 
-            // Execute backtest logic (placeholder)
+            // Execute backtest logic
             BacktestResult result = performBacktest(job);
 
             // Save result

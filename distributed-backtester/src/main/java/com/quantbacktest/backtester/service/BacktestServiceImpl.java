@@ -5,9 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quantbacktest.backtester.controller.dto.BacktestSubmissionRequest;
 import com.quantbacktest.backtester.controller.dto.BacktestSubmissionResponse;
 import com.quantbacktest.backtester.domain.BacktestJob;
+import com.quantbacktest.backtester.domain.BacktestResult;
 import com.quantbacktest.backtester.domain.JobStatus;
 import com.quantbacktest.backtester.infrastructure.QueueService;
 import com.quantbacktest.backtester.repository.BacktestJobRepository;
+import com.quantbacktest.backtester.repository.BacktestResultRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,6 +31,7 @@ import java.util.Optional;
 public class BacktestServiceImpl implements BacktestService {
 
     private final BacktestJobRepository backtestJobRepository;
+    private final BacktestResultRepository backtestResultRepository;
     private final QueueService queueService;
     private final ObjectMapper objectMapper;
 
@@ -47,12 +50,10 @@ public class BacktestServiceImpl implements BacktestService {
 
         if (existingJob.isPresent()) {
             BacktestJob job = existingJob.get();
-            log.info("Duplicate submission detected. Returning existing job ID: {}", job.getId());
-            return BacktestSubmissionResponse.builder()
-                    .jobId(job.getId())
-                    .status(job.getStatus())
-                    .message("Job already exists with this configuration")
-                    .build();
+            log.info("Idempotent request detected for job ID: {} with status: {}",
+                    job.getId(), job.getStatus());
+
+            return handleExistingJob(job);
         }
 
         // Create new backtest job
@@ -73,7 +74,83 @@ public class BacktestServiceImpl implements BacktestService {
                 .jobId(savedJob.getId())
                 .status(savedJob.getStatus())
                 .message("Job queued successfully")
+                .isExisting(false)
                 .build();
+    }
+
+    /**
+     * Handle existing job based on its current status.
+     * Provides true idempotent behavior with appropriate responses.
+     */
+    private BacktestSubmissionResponse handleExistingJob(BacktestJob job) {
+        return switch (job.getStatus()) {
+            case COMPLETED -> {
+                log.info("Job {} is COMPLETED. Fetching and returning results.", job.getId());
+                Optional<BacktestResult> result = backtestResultRepository.findByJobId(job.getId());
+
+                if (result.isPresent()) {
+                    BacktestResult r = result.get();
+                    yield BacktestSubmissionResponse.builder()
+                            .jobId(job.getId())
+                            .status(job.getStatus())
+                            .message("Job already completed. Returning cached results.")
+                            .isExisting(true)
+                            .totalReturn(r.getTotalReturn())
+                            .sharpeRatio(r.getSharpeRatio())
+                            .maxDrawdown(r.getMaxDrawdown())
+                            .winRate(r.getWinRate())
+                            .build();
+                } else {
+                    log.warn("Job {} marked COMPLETED but no result found", job.getId());
+                    yield BacktestSubmissionResponse.builder()
+                            .jobId(job.getId())
+                            .status(job.getStatus())
+                            .message("Job completed but results not found")
+                            .isExisting(true)
+                            .build();
+                }
+            }
+
+            case RUNNING -> {
+                log.info("Job {} is currently RUNNING. Returning job info.", job.getId());
+                yield BacktestSubmissionResponse.builder()
+                        .jobId(job.getId())
+                        .status(job.getStatus())
+                        .message("Job is currently being processed")
+                        .isExisting(true)
+                        .build();
+            }
+
+            case QUEUED -> {
+                log.info("Job {} is QUEUED. Returning job info.", job.getId());
+                yield BacktestSubmissionResponse.builder()
+                        .jobId(job.getId())
+                        .status(job.getStatus())
+                        .message("Job is queued and waiting for processing")
+                        .isExisting(true)
+                        .build();
+            }
+
+            case FAILED -> {
+                log.info("Job {} has FAILED. Returning failure info.", job.getId());
+                yield BacktestSubmissionResponse.builder()
+                        .jobId(job.getId())
+                        .status(job.getStatus())
+                        .message("Job previously failed after " + job.getRetryCount() + " attempts")
+                        .isExisting(true)
+                        .build();
+            }
+
+            case SUBMITTED -> {
+                log.info("Job {} is in SUBMITTED state. Returning job info.", job.getId());
+                yield BacktestSubmissionResponse.builder()
+                        .jobId(job.getId())
+                        .status(job.getStatus())
+                        .message("Job submitted and awaiting queue placement")
+                        .isExisting(true)
+                        .build();
+            }
+        };
     }
 
     /**
