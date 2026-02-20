@@ -33,8 +33,17 @@ public class BacktestResult {
     @Column(name = "total_return", precision = 10, scale = 4)
     private BigDecimal totalReturn;
 
+    @Column(name = "cagr", precision = 10, scale = 4)
+    private BigDecimal cagr;
+
+    @Column(name = "volatility", precision = 10, scale = 4)
+    private BigDecimal volatility;
+
     @Column(name = "sharpe_ratio", precision = 10, scale = 4)
     private BigDecimal sharpeRatio;
+
+    @Column(name = "sortino_ratio", precision = 10, scale = 4)
+    private BigDecimal sortinoRatio;
 
     @Column(name = "max_drawdown", precision = 10, scale = 4)
     private BigDecimal maxDrawdown;

@@ -96,7 +96,10 @@ public class BacktestServiceImpl implements BacktestService {
                             .message("Job already completed. Returning cached results.")
                             .isExisting(true)
                             .totalReturn(r.getTotalReturn())
+                            .cagr(r.getCagr())
+                            .volatility(r.getVolatility())
                             .sharpeRatio(r.getSharpeRatio())
+                            .sortinoRatio(r.getSortinoRatio())
                             .maxDrawdown(r.getMaxDrawdown())
                             .winRate(r.getWinRate())
                             .build();

@@ -25,7 +25,10 @@ public class BacktestSubmissionResponse {
 
     // Result fields (populated only if status is COMPLETED)
     private BigDecimal totalReturn;
+    private BigDecimal cagr;
+    private BigDecimal volatility;
     private BigDecimal sharpeRatio;
+    private BigDecimal sortinoRatio;
     private BigDecimal maxDrawdown;
     private BigDecimal winRate;
 }

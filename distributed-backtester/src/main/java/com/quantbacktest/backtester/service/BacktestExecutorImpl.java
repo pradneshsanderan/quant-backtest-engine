@@ -123,11 +123,14 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             // Convert trades to JSON
             String tradesJson = objectMapper.writeValueAsString(engineResult.getTrades());
 
-            // Create result entity
+            // Create result entity with all performance metrics
             return com.quantbacktest.backtester.domain.BacktestResult.builder()
                     .job(job)
                     .totalReturn(engineResult.getTotalReturn())
+                    .cagr(engineResult.getCagr())
+                    .volatility(engineResult.getVolatility())
                     .sharpeRatio(engineResult.getSharpeRatio())
+                    .sortinoRatio(engineResult.getSortinoRatio())
                     .maxDrawdown(engineResult.getMaxDrawdown())
                     .winRate(engineResult.getWinRate())
                     .resultJson(tradesJson)

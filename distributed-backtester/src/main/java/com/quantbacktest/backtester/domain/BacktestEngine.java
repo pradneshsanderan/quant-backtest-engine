@@ -47,27 +47,42 @@ public class BacktestEngine {
         MarketData lastData = config.getMarketData().get(config.getMarketData().size() - 1);
         BigDecimal finalValue = portfolio.getPortfolioValue(lastData.getClose());
 
-        // Calculate metrics
+        // Calculate all performance metrics
+        int tradingDays = config.getMarketData().size();
+
         BigDecimal totalReturn = PerformanceMetrics.calculateTotalReturn(
                 config.getInitialCapital(), finalValue);
 
+        BigDecimal cagr = PerformanceMetrics.calculateCAGR(
+                config.getInitialCapital(), finalValue, tradingDays);
+
+        BigDecimal volatility = PerformanceMetrics.calculateVolatility(portfolioValues);
+
         BigDecimal sharpeRatio = PerformanceMetrics.calculateSharpeRatio(portfolioValues);
+
+        BigDecimal sortinoRatio = PerformanceMetrics.calculateSortinoRatio(portfolioValues);
 
         BigDecimal maxDrawdown = PerformanceMetrics.calculateMaxDrawdown(portfolioValues);
 
         BigDecimal winRate = PerformanceMetrics.calculateWinRate(portfolio.getTrades());
 
-        log.info("Backtest completed - Total Return: {}%, Sharpe: {}, Max DD: {}%, Win Rate: {}%",
-                totalReturn, sharpeRatio, maxDrawdown, winRate.multiply(BigDecimal.valueOf(100)));
+        log.info("Backtest completed - Total Return: {}%, CAGR: {}%, Volatility: {}%, " +
+                "Sharpe: {}, Sortino: {}, Max DD: {}%, Win Rate: {}%",
+                totalReturn, cagr, volatility, sharpeRatio, sortinoRatio, maxDrawdown,
+                winRate.multiply(BigDecimal.valueOf(100)));
 
         return BacktestResult.builder()
                 .totalReturn(totalReturn)
+                .cagr(cagr)
+                .volatility(volatility)
                 .sharpeRatio(sharpeRatio)
+                .sortinoRatio(sortinoRatio)
                 .maxDrawdown(maxDrawdown)
                 .winRate(winRate)
                 .finalValue(finalValue)
                 .totalTrades(portfolio.getTrades().size())
                 .trades(portfolio.getTrades())
+                .equityCurve(portfolioValues)
                 .build();
     }
 
@@ -89,11 +104,15 @@ public class BacktestEngine {
     @Builder
     public static class BacktestResult {
         private BigDecimal totalReturn;
+        private BigDecimal cagr;
+        private BigDecimal volatility;
         private BigDecimal sharpeRatio;
+        private BigDecimal sortinoRatio;
         private BigDecimal maxDrawdown;
         private BigDecimal winRate;
         private BigDecimal finalValue;
         private int totalTrades;
         private List<Trade> trades;
+        private List<BigDecimal> equityCurve;
     }
 }
