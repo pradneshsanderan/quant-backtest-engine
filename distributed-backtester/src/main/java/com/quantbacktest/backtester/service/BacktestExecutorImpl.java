@@ -36,7 +36,12 @@ public class BacktestExecutorImpl implements BacktestExecutor {
     @Override
     @Transactional
     public void executeBacktest(BacktestJob job) {
-        log.info("Starting execution of backtest job {}", job.getId());
+        // Log lifecycle start
+        if (job.getRetryCount() == 0) {
+            log.info("[JobId={}] Started", job.getId());
+        } else {
+            log.info("[JobId={}] Retry {}", job.getId(), job.getRetryCount());
+        }
 
         try {
             // Race condition check: verify job is not already completed
@@ -73,10 +78,10 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             job.setUpdatedAt(LocalDateTime.now());
             backtestJobRepository.save(job);
 
-            log.info("Job {} completed successfully", job.getId());
+            log.info("[JobId={}] Completed successfully", job.getId());
 
         } catch (Exception e) {
-            log.error("Error executing backtest job {}: {}", job.getId(), e.getMessage(), e);
+            log.error("[JobId={}] Error during execution: {}", job.getId(), e.getMessage(), e);
             handleFailure(job, e);
         }
     }
@@ -155,12 +160,15 @@ public class BacktestExecutorImpl implements BacktestExecutor {
      */
     @Transactional
     private void handleFailure(BacktestJob job, Exception error) {
+        String errorMessage = error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
+
         job.setRetryCount(job.getRetryCount() + 1);
+        job.setFailureReason(errorMessage);
         job.setUpdatedAt(LocalDateTime.now());
 
         if (job.getRetryCount() < MAX_RETRY_COUNT) {
-            log.warn("Job {} failed (attempt {}/{}). Requeuing...",
-                    job.getId(), job.getRetryCount(), MAX_RETRY_COUNT);
+            log.warn("[JobId={}] Failed (attempt {}/{}): {}. Requeuing for retry...",
+                    job.getId(), job.getRetryCount(), MAX_RETRY_COUNT, errorMessage);
 
             job.setStatus(JobStatus.QUEUED);
             backtestJobRepository.save(job);
@@ -168,10 +176,12 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             // Requeue the job
             queueService.push(job.getId());
 
-            log.info("Job {} requeued for retry", job.getId());
+            log.info("[JobId={}] Requeued for retry attempt {}", job.getId(), job.getRetryCount() + 1);
         } else {
-            log.error("Job {} failed after {} attempts. Marking as FAILED",
-                    job.getId(), job.getRetryCount());
+            log.error("[JobId={}] Failed permanently after {} attempts: {}",
+                    job.getId(), job.getRetryCount(), errorMessage);
+            log.error("[JobId={}] DEAD LETTER QUEUE: Job marked as FAILED and will not be retried",
+                    job.getId());
 
             job.setStatus(JobStatus.FAILED);
             backtestJobRepository.save(job);
