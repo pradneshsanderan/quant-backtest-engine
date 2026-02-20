@@ -22,7 +22,8 @@ import java.time.LocalDateTime;
 }, indexes = {
                 @Index(name = "idx_status", columnList = "status"),
                 @Index(name = "idx_created_at", columnList = "created_at"),
-                @Index(name = "idx_strategy_name", columnList = "strategy_name")
+                @Index(name = "idx_strategy_name", columnList = "strategy_name"),
+                @Index(name = "idx_parent_sweep_job", columnList = "parent_sweep_job_id")
 })
 @EntityListeners(AuditingEntityListener.class)
 @Data
@@ -56,6 +57,9 @@ public class BacktestJob {
 
         @Column(name = "idempotency_key", nullable = false, unique = true, length = 255)
         private String idempotencyKey;
+
+        @Column(name = "parent_sweep_job_id")
+        private Long parentSweepJobId;
 
         @Column(name = "retry_count", nullable = false)
         @Builder.Default

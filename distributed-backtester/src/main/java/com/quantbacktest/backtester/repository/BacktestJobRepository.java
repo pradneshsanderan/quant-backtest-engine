@@ -46,4 +46,21 @@ public interface BacktestJobRepository extends JpaRepository<BacktestJob, Long> 
      * @return list of jobs for the given strategy
      */
     List<BacktestJob> findByStrategyName(String strategyName);
+
+    /**
+     * Find all jobs belonging to a parameter sweep.
+     *
+     * @param parentSweepJobId the parent sweep job ID
+     * @return list of child jobs
+     */
+    List<BacktestJob> findByParentSweepJobId(Long parentSweepJobId);
+
+    /**
+     * Count completed jobs for a parameter sweep.
+     *
+     * @param parentSweepJobId the parent sweep job ID
+     * @param status           the job status
+     * @return count of jobs
+     */
+    long countByParentSweepJobIdAndStatus(Long parentSweepJobId, JobStatus status);
 }

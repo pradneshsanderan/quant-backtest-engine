@@ -32,6 +32,7 @@ public class BacktestExecutorImpl implements BacktestExecutor {
     private final MarketDataService marketDataService;
     private final StrategyFactory strategyFactory;
     private final ObjectMapper objectMapper;
+    private final ParameterSweepService parameterSweepService;
 
     @Override
     @Transactional
@@ -79,6 +80,16 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             backtestJobRepository.save(job);
 
             log.info("[JobId={}] Completed successfully", job.getId());
+
+            // Update parent sweep job if this is part of a sweep
+            if (job.getParentSweepJobId() != null) {
+                try {
+                    parameterSweepService.checkSweepProgress(job.getParentSweepJobId());
+                } catch (Exception e) {
+                    log.error("Failed to update sweep progress for job {}: {}",
+                            job.getId(), e.getMessage(), e);
+                }
+            }
 
         } catch (Exception e) {
             log.error("[JobId={}] Error during execution: {}", job.getId(), e.getMessage(), e);
@@ -188,6 +199,16 @@ public class BacktestExecutorImpl implements BacktestExecutor {
 
             job.setStatus(JobStatus.FAILED);
             backtestJobRepository.save(job);
+
+            // Update parent sweep job if this is part of a sweep
+            if (job.getParentSweepJobId() != null) {
+                try {
+                    parameterSweepService.checkSweepProgress(job.getParentSweepJobId());
+                } catch (Exception e) {
+                    log.error("Failed to update sweep progress for failed job {}: {}",
+                            job.getId(), e.getMessage(), e);
+                }
+            }
         }
     }
 }
