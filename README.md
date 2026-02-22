@@ -15,20 +15,20 @@ Test and optimize trading strategies against historical market data with distrib
 
 ## ✨ Features
 
-- **🔒 Concurrency-Safe**: Pessimistic + optimistic locking, idempotency guarantees, no race conditions
-- **⚡ High Performance**: 40+ jobs/second throughput, 50x faster parameter sweeps with batch processing
-- **🎯 Built-in Strategies**: Moving Average Crossover, Buy & Hold, easily extensible
-- **📊 Rich Metrics**: Sharpe ratio, Sortino ratio, max drawdown, total return, and more
-- **🔄 Distributed Processing**: Redis-based job queue with configurable worker threads
-- **💾 Persistent Storage**: PostgreSQL with comprehensive indexing and query optimization
-- **🧪 Thoroughly Tested**: 145+ tests, 80%+ coverage, concurrency validation
-- **📈 Production-Ready**: Actuator metrics, health checks, Prometheus integration
-- **🎛️ Parameter Optimization**: Test multiple parameter combinations in parallel
-- **🛡️ Retry Logic**: Automatic retry with exponential backoff for failed jobs
+- ** Concurrency-Safe**: Pessimistic + optimistic locking, idempotency guarantees, no race conditions
+- ** High Performance**: 40+ jobs/second throughput, 50x faster parameter sweeps with batch processing
+- ** Built-in Strategies**: Moving Average Crossover, Buy & Hold, easily extensible
+- ** Rich Metrics**: Sharpe ratio, Sortino ratio, max drawdown, total return, and more
+- ** Distributed Processing**: Redis-based job queue with configurable worker threads
+- ** Persistent Storage**: PostgreSQL with comprehensive indexing and query optimization
+- ** Thoroughly Tested**: 145+ tests, 80%+ coverage, concurrency validation
+- ** Production-Ready**: Actuator metrics, health checks, Prometheus integration
+- ** Parameter Optimization**: Test multiple parameter combinations in parallel
+- ** Retry Logic**: Automatic retry with exponential backoff for failed jobs
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
@@ -61,7 +61,7 @@ curl http://localhost:8080/api/actuator/health
 
 ---
 
-## 📖 Usage
+##  Usage
 
 ### Submit a Backtest
 
@@ -140,7 +140,7 @@ curl -X POST http://localhost:8080/api/backtests/sweeps \
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 ┌─────────────┐
@@ -180,7 +180,7 @@ curl -X POST http://localhost:8080/api/backtests/sweeps \
 
 ---
 
-## 📊 Performance
+##  Performance
 
 ### High-Load Test Results (100 Concurrent Jobs)
 
@@ -200,7 +200,7 @@ curl -X POST http://localhost:8080/api/backtests/sweeps \
 
 ---
 
-## 🎯 Available Strategies
+##  Available Strategies
 
 ### 1. Buy and Hold
 Simple strategy that buys maximum shares on first tick and holds until the end.
@@ -240,7 +240,7 @@ public class MyStrategy implements Strategy {
 
 ---
 
-## ⚙️ Configuration
+##  Configuration
 
 Configure via environment variables:
 
@@ -276,7 +276,7 @@ spring:
 
 ---
 
-## 🧪 Testing
+##  Testing
 
 Run the comprehensive test suite:
 
@@ -300,7 +300,7 @@ mvn test
 
 ---
 
-## 📚 Documentation
+##  Documentation
 
 - **[PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)** - Comprehensive project documentation (1000+ lines)
 - **[CONCURRENCY_IMPROVEMENTS.md](CONCURRENCY_IMPROVEMENTS.md)** - Concurrency safety details (422 lines)
@@ -310,7 +310,7 @@ mvn test
 
 ---
 
-## 🔍 Monitoring
+##  Monitoring
 
 ### Health Check
 ```bash
@@ -389,29 +389,8 @@ See [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md#3-deploy-to-production) for comple
 
 ---
 
-## 🤝 Contributing
 
-Contributions are welcome! Please follow these guidelines:
-
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
-3. **Write** tests for your changes
-4. **Ensure** all tests pass (`mvn test`)
-5. **Commit** your changes (`git commit -m 'Add amazing feature'`)
-6. **Push** to the branch (`git push origin feature/amazing-feature`)
-7. **Open** a Pull Request
-
-### Code Style
-
-- Follow Java naming conventions
-- Use Lombok for boilerplate reduction
-- Write meaningful commit messages
-- Maintain 80%+ test coverage
-- Add JavaDoc for public APIs
-
----
-
-## 🔐 Security
+##  Security
 
 ### Concurrency Safety
 
@@ -430,29 +409,3 @@ Contributions are welcome! Please follow these guidelines:
 
 ---
 
-## 📄 License
-
-Proprietary - All rights reserved
-
----
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/quant-backtest-engine/issues)
-- **Documentation**: [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)
-- **Email**: your.email@example.com
-
----
-
-## 🙏 Acknowledgments
-
-- Spring Boot team for the excellent framework
-- PostgreSQL team for the robust database
-- Redis team for the fast in-memory store
-- Open source community for testing tools
-
----
-
-**Built with ❤️ for quantitative trading**
-
-*Last Updated: February 22, 2026*
