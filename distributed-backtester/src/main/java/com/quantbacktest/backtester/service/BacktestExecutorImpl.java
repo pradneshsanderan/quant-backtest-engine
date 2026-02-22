@@ -7,7 +7,10 @@ import com.quantbacktest.backtester.repository.BacktestJobRepository;
 import com.quantbacktest.backtester.repository.BacktestResultRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -36,42 +39,68 @@ public class BacktestExecutorImpl implements BacktestExecutor {
     private final BacktestMetricsService metricsService;
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void executeBacktest(BacktestJob job) {
+        // Set MDC for structured logging
+        MDC.put("jobId", String.valueOf(job.getId()));
+
+        try {
+            executeBacktestInternal(job);
+        } finally {
+            MDC.remove("jobId");
+        }
+    }
+
+    /**
+     * Internal execution method with proper locking and race condition prevention.
+     */
+    private void executeBacktestInternal(BacktestJob job) {
+        if (job == null || job.getId() == null) {
+            log.error("Invalid job: job or job ID is null");
+            return;
+        }
+
         long startTime = System.currentTimeMillis();
 
         // Log lifecycle start
         if (job.getRetryCount() == 0) {
-            log.info("[JobId={}] Started", job.getId());
+            log.info("Started");
         } else {
-            log.info("[JobId={}] Retry {}", job.getId(), job.getRetryCount());
+            log.info("Retry {}", job.getRetryCount());
         }
 
         try {
+            // CRITICAL: Acquire pessimistic lock to prevent race conditions
+            // This prevents TOCTOU (Time-of-check-time-of-use) vulnerability
+            BacktestJob lockedJob = backtestJobRepository.findByIdForUpdate(job.getId())
+                    .orElseThrow(() -> new IllegalStateException("Job not found: " + job.getId()));
+
             // Race condition check: verify job is not already completed
             // This can happen if multiple workers dequeue the same job
-            if (job.getStatus() == JobStatus.COMPLETED) {
-                log.warn("[JobId={}] Already COMPLETED. Skipping execution to prevent duplicate processing.",
-                        job.getId());
+            if (lockedJob.getStatus() == JobStatus.COMPLETED) {
+                log.warn("Already COMPLETED. Skipping execution to prevent duplicate processing.");
                 return;
             }
 
             // Also check if another worker is already processing it
-            if (job.getStatus() == JobStatus.RUNNING) {
-                log.warn("[JobId={}] Already RUNNING by another worker. Skipping duplicate execution.",
-                        job.getId());
+            if (lockedJob.getStatus() == JobStatus.RUNNING) {
+                log.warn("Already RUNNING by another worker. Skipping duplicate execution.");
                 return;
             }
 
-            // Update job status to RUNNING
-            job.setStatus(JobStatus.RUNNING);
-            job.setUpdatedAt(LocalDateTime.now());
-            backtestJobRepository.save(job);
+            // Update job status to RUNNING (within the locked transaction)
+            lockedJob.setStatus(JobStatus.RUNNING);
+            lockedJob.setUpdatedAt(LocalDateTime.now());
+            backtestJobRepository.save(lockedJob);
 
-            log.info("[JobId={}] Status changed to RUNNING", job.getId());
+            log.info("Status changed to RUNNING");
 
             // Execute backtest logic
-            BacktestResult result = performBacktest(job, startTime);
+            BacktestResult result = performBacktest(lockedJob, startTime);
+
+            if (result == null) {
+                throw new IllegalStateException("Backtest execution returned null result");
+            }
 
             // Save result
             backtestResultRepository.save(result);
@@ -80,31 +109,40 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             long executionTimeMs = System.currentTimeMillis() - startTime;
             double executionTimeSec = executionTimeMs / 1000.0;
 
-            log.info("[JobId={}] Backtest result saved", job.getId());
+            log.info("Backtest result saved");
 
             // Mark job as COMPLETED
-            job.setStatus(JobStatus.COMPLETED);
-            job.setUpdatedAt(LocalDateTime.now());
-            backtestJobRepository.save(job);
+            lockedJob.setStatus(JobStatus.COMPLETED);
+            lockedJob.setUpdatedAt(LocalDateTime.now());
+            backtestJobRepository.save(lockedJob);
 
-            log.info("[JobId={}] Status changed to COMPLETED", job.getId());
-            log.info("[JobId={}] Completed in {:.2f}s", job.getId(), executionTimeSec);
+            log.info("Status changed to COMPLETED");
+            log.info("Completed in {:.2f}s", executionTimeSec);
 
             // Record metrics
             metricsService.recordJobCompleted(executionTimeMs);
 
             // Update parent sweep job if this is part of a sweep
-            if (job.getParentSweepJobId() != null) {
+            if (lockedJob.getParentSweepJobId() != null) {
                 try {
-                    parameterSweepService.checkSweepProgress(job.getParentSweepJobId());
+                    parameterSweepService.checkSweepProgress(lockedJob.getParentSweepJobId());
                 } catch (Exception e) {
-                    log.error("Failed to update sweep progress for job {}: {}",
-                            job.getId(), e.getMessage(), e);
+                    log.error("Failed to update sweep progress: {}", e.getMessage(), e);
                 }
             }
 
+        } catch (OptimisticLockingFailureException e) {
+            log.warn(
+                    "Concurrent modification detected (optimistic lock). Job may have been processed by another worker.");
+            // Don't retry - another worker handled it
+        } catch (IllegalStateException e) {
+            log.error("Invalid state: {}", e.getMessage(), e);
+            handleFailure(job, e);
+        } catch (RuntimeException e) {
+            log.error("Error during execution: {}", e.getMessage(), e);
+            handleFailure(job, e);
         } catch (Exception e) {
-            log.error("[JobId={}] Error during execution: {}", job.getId(), e.getMessage(), e);
+            log.error("Unexpected error during execution: {}", e.getMessage(), e);
             handleFailure(job, e);
         }
     }
@@ -113,8 +151,12 @@ public class BacktestExecutorImpl implements BacktestExecutor {
      * Execute backtest using the real backtesting engine.
      */
     private com.quantbacktest.backtester.domain.BacktestResult performBacktest(BacktestJob job, long startTime) {
-        log.info("[JobId={}] Performing backtest - Strategy: {}, Symbol: {}, Period: {} to {}",
-                job.getId(), job.getStrategyName(), job.getSymbol(),
+        if (job == null) {
+            throw new IllegalArgumentException("Job cannot be null");
+        }
+
+        log.info("Performing backtest - Strategy: {}, Symbol: {}, Period: {} to {}",
+                job.getStrategyName(), job.getSymbol(),
                 job.getStartDate(), job.getEndDate());
 
         try {
@@ -122,8 +164,8 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             List<MarketData> marketData = marketDataService.loadMarketData(
                     job.getSymbol(), job.getStartDate(), job.getEndDate());
 
-            if (marketData.isEmpty()) {
-                throw new RuntimeException("No market data available for the specified period");
+            if (marketData == null || marketData.isEmpty()) {
+                throw new IllegalStateException("No market data available for the specified period");
             }
 
             // Parse parameters and get initial capital
@@ -132,6 +174,10 @@ public class BacktestExecutorImpl implements BacktestExecutor {
             // Create strategy
             Strategy strategy = strategyFactory.createStrategy(
                     job.getStrategyName(), job.getParametersJson());
+
+            if (strategy == null) {
+                throw new IllegalStateException("Strategy factory returned null for: " + job.getStrategyName());
+            }
 
             // Run backtest
             BacktestEngine engine = new BacktestEngine();
@@ -142,6 +188,10 @@ public class BacktestExecutorImpl implements BacktestExecutor {
                     .build();
 
             BacktestEngine.BacktestResult engineResult = engine.runBacktest(config);
+
+            if (engineResult == null) {
+                throw new IllegalStateException("Backtest engine returned null result");
+            }
 
             // Convert trades to JSON
             String tradesJson = objectMapper.writeValueAsString(engineResult.getTrades());
@@ -163,8 +213,11 @@ public class BacktestExecutorImpl implements BacktestExecutor {
                     .resultJson(tradesJson)
                     .build();
 
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            // Re-throw validation errors
+            throw e;
         } catch (Exception e) {
-            log.error("[JobId={}] Backtest execution failed: {}", job.getId(), e.getMessage(), e);
+            log.error("Backtest execution failed: {}", e.getMessage(), e);
             throw new RuntimeException("Backtest execution failed", e);
         }
     }
@@ -173,66 +226,118 @@ public class BacktestExecutorImpl implements BacktestExecutor {
      * Parse initial capital from parameters JSON.
      */
     private BigDecimal parseInitialCapital(String parametersJson) {
+        if (parametersJson == null || parametersJson.isBlank()) {
+            log.debug("No parameters JSON provided, using default initial capital");
+            return new BigDecimal("10000.00");
+        }
+
         try {
             var params = objectMapper.readTree(parametersJson);
-            if (params.has("initialCapital")) {
-                return new BigDecimal(params.get("initialCapital").asText());
+            if (params != null && params.has("initialCapital") && !params.get("initialCapital").isNull()) {
+                String capitalStr = params.get("initialCapital").asText();
+                BigDecimal capital = new BigDecimal(capitalStr);
+
+                if (capital.compareTo(BigDecimal.ZERO) <= 0) {
+                    log.warn("Invalid initial capital: {}. Using default.", capitalStr);
+                    return new BigDecimal("10000.00");
+                }
+
+                return capital;
             }
             return new BigDecimal("10000.00"); // Default
         } catch (Exception e) {
-            log.warn("Failed to parse initialCapital from parameters, using default", e);
+            log.warn("Failed to parse initialCapital from parameters, using default: {}", e.getMessage());
             return new BigDecimal("10000.00");
         }
     }
 
     /**
      * Handle job failure with retry logic.
+     * Uses separate transaction to ensure failure handling persists even if parent
+     * transaction rolls back.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
     private void handleFailure(BacktestJob job, Exception error) {
-        String errorMessage = error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
+        if (job == null || job.getId() == null) {
+            log.error("Cannot handle failure for null job");
+            return;
+        }
 
-        job.setRetryCount(job.getRetryCount() + 1);
-        job.setFailureReason(errorMessage);
-        job.setUpdatedAt(LocalDateTime.now());
+        // Set MDC for logging if not already set
+        String jobIdStr = String.valueOf(job.getId());
+        if (MDC.get("jobId") == null) {
+            MDC.put("jobId", jobIdStr);
+        }
 
-        if (job.getRetryCount() < MAX_RETRY_COUNT) {
-            log.warn("[JobId={}] Failed (attempt {}/{}): {}. Requeuing for retry...",
-                    job.getId(), job.getRetryCount(), MAX_RETRY_COUNT, errorMessage);
+        try {
+            String errorMessage = error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
+            // Truncate error message to prevent database field overflow
+            if (errorMessage.length() > 1000) {
+                errorMessage = errorMessage.substring(0, 997) + "...";
+            }
 
-            job.setStatus(JobStatus.QUEUED);
-            backtestJobRepository.save(job);
+            // Reload job with lock to prevent concurrent modifications
+            BacktestJob lockedJob = backtestJobRepository.findByIdForUpdate(job.getId())
+                    .orElse(job);
 
-            // Requeue the job
-            queueService.push(job.getId());
+            lockedJob.setRetryCount(lockedJob.getRetryCount() + 1);
+            lockedJob.setFailureReason(errorMessage);
+            lockedJob.setUpdatedAt(LocalDateTime.now());
 
-            log.info("[JobId={}] Status changed to QUEUED", job.getId());
-            log.info("[JobId={}] Requeued for retry attempt {}", job.getId(), job.getRetryCount() + 1);
+            if (lockedJob.getRetryCount() < MAX_RETRY_COUNT) {
+                log.warn("Failed (attempt {}/{}): {}. Requeuing for retry...",
+                        lockedJob.getRetryCount(), MAX_RETRY_COUNT, errorMessage);
 
-            // Record retry metric
-            metricsService.recordJobRetried();
-        } else {
-            log.error("[JobId={}] Failed permanently after {} attempts: {}",
-                    job.getId(), job.getRetryCount(), errorMessage);
-            log.error("[JobId={}] DEAD LETTER QUEUE: Job marked as FAILED and will not be retried",
-                    job.getId());
+                lockedJob.setStatus(JobStatus.QUEUED);
+                backtestJobRepository.save(lockedJob);
 
-            job.setStatus(JobStatus.FAILED);
-            backtestJobRepository.save(job);
-
-            log.info("[JobId={}] Status changed to FAILED", job.getId());
-
-            // Record failure metric
-            metricsService.recordJobFailed();
-
-            // Update parent sweep job if this is part of a sweep
-            if (job.getParentSweepJobId() != null) {
+                // Requeue the job
                 try {
-                    parameterSweepService.checkSweepProgress(job.getParentSweepJobId());
-                } catch (Exception e) {
-                    log.error("Failed to update sweep progress for failed job {}: {}",
-                            job.getId(), e.getMessage(), e);
+                    queueService.push(lockedJob.getId());
+                    log.info("Status changed to QUEUED");
+                    log.info("Requeued for retry attempt {}", lockedJob.getRetryCount() + 1);
+                } catch (Exception queueEx) {
+                    log.error("Failed to requeue job: {}", queueEx.getMessage(), queueEx);
+                    // Mark as FAILED if we can't requeue
+                    lockedJob.setStatus(JobStatus.FAILED);
+                    backtestJobRepository.save(lockedJob);
                 }
+
+                // Record retry metric
+                try {
+                    metricsService.recordJobRetried();
+                } catch (Exception metricsEx) {
+                    log.warn("Failed to record retry metric: {}", metricsEx.getMessage());
+                }
+            } else {
+                log.error("Failed permanently after {} attempts: {}",
+                        lockedJob.getRetryCount(), errorMessage);
+                log.error("DEAD LETTER QUEUE: Job marked as FAILED and will not be retried");
+
+                lockedJob.setStatus(JobStatus.FAILED);
+                backtestJobRepository.save(lockedJob);
+
+                log.info("Status changed to FAILED");
+
+                // Record failure metric
+                try {
+                    metricsService.recordJobFailed();
+                } catch (Exception metricsEx) {
+                    log.warn("Failed to record failure metric: {}", metricsEx.getMessage());
+                }
+
+                // Update parent sweep job if this is part of a sweep
+                if (lockedJob.getParentSweepJobId() != null) {
+                    try {
+                        parameterSweepService.checkSweepProgress(lockedJob.getParentSweepJobId());
+                    } catch (Exception e) {
+                        log.error("Failed to update sweep progress: {}", e.getMessage(), e);
+                    }
+                }
+            }
+        } finally {
+            if (MDC.get("jobId") != null) {
+                MDC.remove("jobId");
             }
         }
     }

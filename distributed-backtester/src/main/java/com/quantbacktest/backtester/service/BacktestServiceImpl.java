@@ -12,6 +12,7 @@ import com.quantbacktest.backtester.repository.BacktestJobRepository;
 import com.quantbacktest.backtester.repository.BacktestResultRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +40,10 @@ public class BacktestServiceImpl implements BacktestService {
     @Override
     @Transactional
     public BacktestSubmissionResponse submitBacktest(BacktestSubmissionRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("Request cannot be null");
+        }
+
         log.info("Received backtest submission for strategy: {}, symbol: {}",
                 request.getStrategyName(), request.getSymbol());
 
@@ -51,36 +56,55 @@ public class BacktestServiceImpl implements BacktestService {
 
         if (existingJob.isPresent()) {
             BacktestJob job = existingJob.get();
-            log.info("Idempotent request detected for job ID: {} with status: {}",
-                    job.getId(), job.getStatus());
-
-            return handleExistingJob(job);
+            // Set MDC for logging
+            MDC.put("jobId", String.valueOf(job.getId()));
+            try {
+                log.info("Idempotent request detected - status: {}", job.getStatus());
+                return handleExistingJob(job);
+            } finally {
+                MDC.remove("jobId");
+            }
         }
 
         // Create new backtest job
         BacktestJob newJob = createBacktestJob(request, idempotencyKey);
         BacktestJob savedJob = backtestJobRepository.save(newJob);
 
-        log.info("[JobId={}] Created new backtest job", savedJob.getId());
+        // Set MDC for logging
+        MDC.put("jobId", String.valueOf(savedJob.getId()));
+        try {
+            log.info("Created new backtest job");
 
-        // Push job to Redis queue and update status
-        queueService.push(savedJob.getId());
-        savedJob.setStatus(JobStatus.QUEUED);
-        savedJob.setUpdatedAt(LocalDateTime.now());
-        backtestJobRepository.save(savedJob);
+            // Push job to Redis queue and update status
+            try {
+                queueService.push(savedJob.getId());
+                savedJob.setStatus(JobStatus.QUEUED);
+                savedJob.setUpdatedAt(LocalDateTime.now());
+                backtestJobRepository.save(savedJob);
 
-        log.info("[JobId={}] Status changed to QUEUED", savedJob.getId());
-        log.info("[JobId={}] Pushed to queue", savedJob.getId());
+                log.info("Status changed to QUEUED");
+                log.info("Pushed to queue");
+            } catch (Exception e) {
+                log.error("Failed to queue job: {}", e.getMessage(), e);
+                throw new RuntimeException("Failed to queue backtest job", e);
+            }
 
-        // Record submission metric
-        metricsService.recordJobSubmitted();
+            // Record submission metric
+            try {
+                metricsService.recordJobSubmitted();
+            } catch (Exception e) {
+                log.warn("Failed to record submission metric: {}", e.getMessage());
+            }
 
-        return BacktestSubmissionResponse.builder()
-                .jobId(savedJob.getId())
-                .status(savedJob.getStatus())
-                .message("Job queued successfully")
-                .isExisting(false)
-                .build();
+            return BacktestSubmissionResponse.builder()
+                    .jobId(savedJob.getId())
+                    .status(savedJob.getStatus())
+                    .message("Job queued successfully")
+                    .isExisting(false)
+                    .build();
+        } finally {
+            MDC.remove("jobId");
+        }
     }
 
     /**
@@ -88,9 +112,13 @@ public class BacktestServiceImpl implements BacktestService {
      * Provides true idempotent behavior with appropriate responses.
      */
     private BacktestSubmissionResponse handleExistingJob(BacktestJob job) {
+        if (job == null) {
+            throw new IllegalArgumentException("Job cannot be null");
+        }
+
         return switch (job.getStatus()) {
             case COMPLETED -> {
-                log.info("[JobId={}] Already COMPLETED. Fetching and returning cached results.", job.getId());
+                log.info("Already COMPLETED. Fetching and returning cached results.");
                 Optional<BacktestResult> result = backtestResultRepository.findByJobId(job.getId());
 
                 if (result.isPresent()) {
@@ -109,7 +137,7 @@ public class BacktestServiceImpl implements BacktestService {
                             .winRate(r.getWinRate())
                             .build();
                 } else {
-                    log.warn("Job {} marked COMPLETED but no result found", job.getId());
+                    log.warn("Job marked COMPLETED but no result found");
                     yield BacktestSubmissionResponse.builder()
                             .jobId(job.getId())
                             .status(job.getStatus())
@@ -120,7 +148,7 @@ public class BacktestServiceImpl implements BacktestService {
             }
 
             case RUNNING -> {
-                log.info("Job {} is currently RUNNING. Returning job info.", job.getId());
+                log.info("Job is currently RUNNING. Returning job info.");
                 yield BacktestSubmissionResponse.builder()
                         .jobId(job.getId())
                         .status(job.getStatus())
@@ -130,7 +158,7 @@ public class BacktestServiceImpl implements BacktestService {
             }
 
             case QUEUED -> {
-                log.info("Job {} is QUEUED. Returning job info.", job.getId());
+                log.info("Job is QUEUED. Returning job info.");
                 yield BacktestSubmissionResponse.builder()
                         .jobId(job.getId())
                         .status(job.getStatus())
@@ -140,7 +168,7 @@ public class BacktestServiceImpl implements BacktestService {
             }
 
             case FAILED -> {
-                log.info("Job {} has FAILED. Returning failure info.", job.getId());
+                log.info("Job has FAILED. Returning failure info.");
                 yield BacktestSubmissionResponse.builder()
                         .jobId(job.getId())
                         .status(job.getStatus())
@@ -150,7 +178,7 @@ public class BacktestServiceImpl implements BacktestService {
             }
 
             case SUBMITTED -> {
-                log.info("Job {} is in SUBMITTED state. Returning job info.", job.getId());
+                log.info("Job is in SUBMITTED state. Returning job info.");
                 yield BacktestSubmissionResponse.builder()
                         .jobId(job.getId())
                         .status(job.getStatus())
@@ -165,9 +193,17 @@ public class BacktestServiceImpl implements BacktestService {
      * Generate SHA-256 hash of the request payload for idempotency.
      */
     private String generateIdempotencyKey(BacktestSubmissionRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("Request cannot be null");
+        }
+
         try {
             // Serialize request to JSON
             String jsonPayload = objectMapper.writeValueAsString(request);
+
+            if (jsonPayload == null || jsonPayload.isBlank()) {
+                throw new IllegalStateException("Serialized request is null or empty");
+            }
 
             // Generate SHA-256 hash
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -176,10 +212,10 @@ public class BacktestServiceImpl implements BacktestService {
             // Convert to hex string
             return HexFormat.of().formatHex(hash);
         } catch (JsonProcessingException e) {
-            log.error("Failed to serialize request to JSON", e);
+            log.error("Failed to serialize request to JSON: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to generate idempotency key", e);
         } catch (NoSuchAlgorithmException e) {
-            log.error("SHA-256 algorithm not available", e);
+            log.error("SHA-256 algorithm not available: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to generate idempotency key", e);
         }
     }
@@ -188,6 +224,13 @@ public class BacktestServiceImpl implements BacktestService {
      * Create a new BacktestJob entity from the request.
      */
     private BacktestJob createBacktestJob(BacktestSubmissionRequest request, String idempotencyKey) {
+        if (request == null) {
+            throw new IllegalArgumentException("Request cannot be null");
+        }
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException("Idempotency key cannot be null or empty");
+        }
+
         try {
             // Convert parameters map to JSON string
             String parametersJson = objectMapper.writeValueAsString(request.getParameters());
@@ -205,7 +248,7 @@ public class BacktestServiceImpl implements BacktestService {
                     .updatedAt(LocalDateTime.now())
                     .build();
         } catch (JsonProcessingException e) {
-            log.error("Failed to serialize parameters to JSON", e);
+            log.error("Failed to serialize parameters to JSON: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to create backtest job", e);
         }
     }

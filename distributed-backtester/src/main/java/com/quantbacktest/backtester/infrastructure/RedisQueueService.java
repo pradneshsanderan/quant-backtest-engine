@@ -2,6 +2,7 @@ package com.quantbacktest.backtester.infrastructure;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -10,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Redis-based implementation of the QueueService.
  * Uses Redis list operations for FIFO job queue.
+ * Thread-safe: Redis operations are atomic.
  */
 @Service
 @RequiredArgsConstructor
@@ -23,12 +25,21 @@ public class RedisQueueService implements QueueService {
 
     @Override
     public void push(Long jobId) {
+        if (jobId == null) {
+            log.error("Cannot push null job ID to queue");
+            throw new IllegalArgumentException("Job ID cannot be null");
+        }
+
         log.info("Pushing job {} to Redis queue: {}", jobId, QUEUE_NAME);
         try {
-            redisTemplate.opsForList().rightPush(QUEUE_NAME, jobId);
-            log.debug("Successfully pushed job {} to queue", jobId);
+            // RPUSH is atomic in Redis - thread-safe
+            Long queueSize = redisTemplate.opsForList().rightPush(QUEUE_NAME, jobId);
+            log.debug("Successfully pushed job {} to queue. Queue size: {}", jobId, queueSize);
+        } catch (DataAccessException e) {
+            log.error("Redis error while pushing job {} to queue: {}", jobId, e.getMessage(), e);
+            throw new RuntimeException("Failed to enqueue job due to Redis error", e);
         } catch (Exception e) {
-            log.error("Failed to push job {} to Redis queue", jobId, e);
+            log.error("Unexpected error while pushing job {} to queue: {}", jobId, e.getMessage(), e);
             throw new RuntimeException("Failed to enqueue job", e);
         }
     }
@@ -36,7 +47,8 @@ public class RedisQueueService implements QueueService {
     @Override
     public Long pop() {
         try {
-            // Use blocking pop with timeout for efficient polling
+            // BLPOP (blocking left pop) is atomic in Redis - thread-safe
+            // Multiple workers can safely call this without race conditions
             Object value = redisTemplate.opsForList()
                     .leftPop(QUEUE_NAME, POP_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
@@ -46,9 +58,16 @@ public class RedisQueueService implements QueueService {
                 return jobId;
             }
 
+            // Timeout - no job available
             return null;
+        } catch (ClassCastException e) {
+            log.error("Invalid data type in queue. Expected Number: {}", e.getMessage(), e);
+            return null;
+        } catch (DataAccessException e) {
+            log.error("Redis error while popping from queue: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to dequeue job due to Redis error", e);
         } catch (Exception e) {
-            log.error("Failed to pop job from Redis queue", e);
+            log.error("Unexpected error while popping from queue: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to dequeue job", e);
         }
     }

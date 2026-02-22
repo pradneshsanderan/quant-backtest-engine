@@ -36,6 +36,10 @@ public class BacktestJob {
         @GeneratedValue(strategy = GenerationType.IDENTITY)
         private Long id;
 
+        @Version
+        @Column(name = "version")
+        private Long version;
+
         @Column(name = "strategy_name", nullable = false, length = 255)
         private String strategyName;
 

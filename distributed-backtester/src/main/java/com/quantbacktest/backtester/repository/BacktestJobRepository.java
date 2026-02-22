@@ -2,7 +2,11 @@ package com.quantbacktest.backtester.repository;
 
 import com.quantbacktest.backtester.domain.BacktestJob;
 import com.quantbacktest.backtester.domain.JobStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -22,6 +26,17 @@ public interface BacktestJobRepository extends JpaRepository<BacktestJob, Long> 
      * @return Optional containing the job if found
      */
     Optional<BacktestJob> findByIdempotencyKey(String idempotencyKey);
+
+    /**
+     * Find and lock a job by ID for update (pessimistic write lock).
+     * Prevents race conditions during status transitions.
+     *
+     * @param id the job ID
+     * @return Optional containing the locked job if found
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT j FROM BacktestJob j WHERE j.id = :id")
+    Optional<BacktestJob> findByIdForUpdate(@Param("id") Long id);
 
     /**
      * Find all jobs with a specific status.

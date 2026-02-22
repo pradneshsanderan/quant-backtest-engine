@@ -128,6 +128,11 @@ public class ParameterSweepService {
      */
     @Transactional
     public void checkSweepProgress(Long sweepJobId) {
+        if (sweepJobId == null) {
+            log.warn("Sweep job ID is null");
+            return;
+        }
+
         Optional<ParameterSweepJob> sweepOptional = sweepJobRepository.findById(sweepJobId);
         if (sweepOptional.isEmpty()) {
             log.warn("Sweep job {} not found", sweepJobId);
@@ -165,8 +170,14 @@ public class ParameterSweepService {
 
     /**
      * Find and update the best performing job in the sweep.
+     * Uses batch query to avoid N+1 problem.
      */
     private void updateBestResult(ParameterSweepJob sweep) {
+        if (sweep == null || sweep.getId() == null) {
+            log.warn("Invalid sweep job");
+            return;
+        }
+
         List<BacktestJob> completedJobs = backtestJobRepository.findByParentSweepJobId(sweep.getId())
                 .stream()
                 .filter(job -> job.getStatus() == JobStatus.COMPLETED)
@@ -177,16 +188,29 @@ public class ParameterSweepService {
             return;
         }
 
+        // OPTIMIZATION: Batch load all results to avoid N+1 query
+        List<Long> jobIds = completedJobs.stream()
+                .map(BacktestJob::getId)
+                .toList();
+
+        List<BacktestResult> results = backtestResultRepository.findByJobIdIn(jobIds);
+
+        // Create a map for O(1) lookup
+        Map<Long, BacktestResult> resultsByJobId = results.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        r -> r.getJob().getId(),
+                        r -> r));
+
         BacktestJob bestJob = null;
         BigDecimal bestMetricValue = null;
 
         for (BacktestJob job : completedJobs) {
-            Optional<BacktestResult> resultOptional = backtestResultRepository.findByJobId(job.getId());
-            if (resultOptional.isEmpty()) {
+            BacktestResult result = resultsByJobId.get(job.getId());
+            if (result == null) {
+                log.debug("No result found for completed job {}", job.getId());
                 continue;
             }
 
-            BacktestResult result = resultOptional.get();
             BigDecimal metricValue = getMetricValue(result, sweep.getOptimizationMetric());
 
             if (metricValue != null && (bestMetricValue == null || metricValue.compareTo(bestMetricValue) > 0)) {
@@ -200,6 +224,8 @@ public class ParameterSweepService {
             sweep.setBestMetricValue(bestMetricValue);
             log.info("Best job for sweep {} is job {} with {} = {}",
                     sweep.getId(), bestJob.getId(), sweep.getOptimizationMetric(), bestMetricValue);
+        } else {
+            log.warn("Could not determine best job for sweep {}", sweep.getId());
         }
     }
 
@@ -207,13 +233,20 @@ public class ParameterSweepService {
      * Get the specified metric value from a result.
      */
     private BigDecimal getMetricValue(BacktestResult result, String metricName) {
+        if (result == null || metricName == null) {
+            return null;
+        }
+
         return switch (metricName.toLowerCase()) {
             case "totalreturn" -> result.getTotalReturn();
             case "sharperatio" -> result.getSharpeRatio();
             case "sortinoratio" -> result.getSortinoRatio();
             case "cagr" -> result.getCagr();
             case "winrate" -> result.getWinRate();
-            case "maxdrawdown" -> result.getMaxDrawdown().negate(); // Negate because lower is better
+            case "maxdrawdown" -> result.getMaxDrawdown() != null ? result.getMaxDrawdown().negate() : null; // Negate
+                                                                                                             // because
+                                                                                                             // lower is
+                                                                                                             // better
             default -> result.getSharpeRatio(); // Default to Sharpe ratio
         };
     }

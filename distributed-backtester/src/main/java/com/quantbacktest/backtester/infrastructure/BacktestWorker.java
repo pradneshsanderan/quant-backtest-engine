@@ -6,6 +6,7 @@ import com.quantbacktest.backtester.repository.BacktestJobRepository;
 import com.quantbacktest.backtester.service.BacktestExecutor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 
 import java.util.Optional;
 
@@ -64,12 +65,21 @@ public class BacktestWorker implements Runnable {
      * Process a single job fetched from the queue.
      */
     private void processJob(Long jobId) {
+        if (jobId == null) {
+            log.warn("{} - Received null job ID", workerName);
+            return;
+        }
+
+        // Set MDC for structured logging
+        MDC.put("jobId", String.valueOf(jobId));
+        MDC.put("worker", workerName);
+
         try {
             // Fetch job from database
             Optional<BacktestJob> jobOptional = backtestJobRepository.findById(jobId);
 
             if (jobOptional.isEmpty()) {
-                log.warn("{} - Job {} not found in database", workerName, jobId);
+                log.warn("Job not found in database");
                 return;
             }
 
@@ -77,20 +87,17 @@ public class BacktestWorker implements Runnable {
 
             // Idempotency check: verify job should be processed
             if (job.getStatus() == JobStatus.COMPLETED) {
-                log.warn("{} - Job {} is already COMPLETED. Skipping duplicate processing.",
-                        workerName, job.getId());
+                log.warn("Job is already COMPLETED. Skipping duplicate processing.");
                 return;
             }
 
             if (job.getStatus() == JobStatus.RUNNING) {
-                log.warn("{} - Job {} is already RUNNING. Another worker may be processing it.",
-                        workerName, job.getId());
+                log.warn("Job is already RUNNING. Another worker may be processing it.");
                 return;
             }
 
             if (job.getStatus() == JobStatus.FAILED) {
-                log.info("{} - Job {} is marked FAILED. This may be a retry attempt.",
-                        workerName, job.getId());
+                log.info("Job is marked FAILED. This may be a retry attempt.");
             }
 
             // Apply exponential backoff if this is a retry
@@ -98,17 +105,23 @@ public class BacktestWorker implements Runnable {
                 applyExponentialBackoff(job);
             }
 
-            log.info("{} processing [JobId={}] - Strategy: {}, Symbol: {}, Status: {}, RetryCount: {}",
-                    workerName, job.getId(), job.getStrategyName(), job.getSymbol(),
+            log.info("Processing - Strategy: {}, Symbol: {}, Status: {}, RetryCount: {}",
+                    job.getStrategyName(), job.getSymbol(),
                     job.getStatus(), job.getRetryCount());
 
             // Execute the backtest
             backtestExecutor.executeBacktest(job);
 
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Processing interrupted");
+            throw new RuntimeException("Job processing interrupted", e);
         } catch (Exception e) {
-            log.error("{} failed to process job {}: {}",
-                    workerName, jobId, e.getMessage(), e);
-            // Exception is logged but not swallowed - executor handles failure logic
+            log.error("Failed to process job: {}", e.getMessage(), e);
+            // Exception is logged - executor handles failure logic internally
+        } finally {
+            MDC.remove("jobId");
+            MDC.remove("worker");
         }
     }
 
@@ -116,19 +129,18 @@ public class BacktestWorker implements Runnable {
      * Apply exponential backoff delay before processing a retried job.
      * Delays: 1st retry = 1s, 2nd retry = 3s, 3rd retry = 5s
      */
-    private void applyExponentialBackoff(BacktestJob job) {
+    private void applyExponentialBackoff(BacktestJob job) throws InterruptedException {
+        if (job == null) {
+            return;
+        }
+
         int retryIndex = job.getRetryCount() - 1;
         if (retryIndex >= 0 && retryIndex < BACKOFF_DELAYS.length) {
             long delayMs = BACKOFF_DELAYS[retryIndex];
-            log.info("{} - [JobId={}] Applying exponential backoff: {}ms before retry {}",
-                    workerName, job.getId(), delayMs, job.getRetryCount());
+            log.info("Applying exponential backoff: {}ms before retry {}",
+                    delayMs, job.getRetryCount());
 
-            try {
-                Thread.sleep(delayMs);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("{} - [JobId={}] Backoff interrupted", workerName, job.getId());
-            }
+            Thread.sleep(delayMs);
         }
     }
 
