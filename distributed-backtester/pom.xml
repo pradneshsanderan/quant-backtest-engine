@@ -45,6 +45,13 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- H2 Database for Testing -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Spring Data Redis -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

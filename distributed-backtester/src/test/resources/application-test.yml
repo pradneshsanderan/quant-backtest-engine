@@ -1,0 +1,62 @@
+# Test Configuration for High Load Integration Tests
+spring:
+  application:
+    name: distributed-backtester-test
+
+  # H2 In-Memory Database for Testing
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  h2:
+    console:
+      enabled: false
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: false
+        jdbc:
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
+    open-in-view: false
+
+  # Embedded Redis for Testing (using embedded-redis)
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: -1ms
+
+# Server Configuration
+server:
+  port: 0 # Random port for testing
+
+# Logging Configuration for Tests
+logging:
+  level:
+    root: INFO
+    com.quantbacktest.backtester: DEBUG
+    org.springframework.web: WARN
+    org.hibernate.SQL: WARN
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# Backtest Worker Configuration
+backtest:
+  worker:
+    enabled: false # Disable auto-start of workers in tests
+    thread-count: 1 # Must be > 0 for ExecutorService creation
